@@ -33,7 +33,7 @@ install: build
 	install -vDm 755 $(KEYRING_FILES) -t $(KEYRING_TARGET_DIR)
 
 uninstall:
-	rm -f $(KEYRING_TARGET_DIR)/holo{.gpg,-trusted,-revoked}
+	rm -f $(KEYRING_TARGET_DIR)/steamfork{.gpg,-trusted,-revoked}
 	rmdir -p --ignore-fail-on-non-empty $(KEYRING_TARGET_DIR)
 
 .PHONY: all lint fmt check test clean install uninstall
