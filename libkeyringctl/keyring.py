@@ -1146,19 +1146,19 @@ def build(
     target_dir.mkdir(parents=True, exist_ok=True)
     target_dir.touch()
 
-    keyring: Path = target_dir / Path("holo.gpg")
+    keyring: Path = target_dir / Path("steamfork.gpg")
     export(working_dir=working_dir, keyring_root=keyring_root, output=keyring)
 
     trusted_main_keys = export_ownertrust(
         certs=[keyring_root / "main"],
         keyring_root=keyring_root,
-        output=target_dir / "holo-trusted",
+        output=target_dir / "steamfork-trusted",
     )
     export_revoked(
         certs=[keyring_root],
         keyring_root=keyring_root,
         main_keys=set(trusted_main_keys),
-        output=target_dir / "holo-revoked",
+        output=target_dir / "steamfork-revoked",
     )
 
 
