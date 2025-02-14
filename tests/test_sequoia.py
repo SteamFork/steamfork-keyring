@@ -107,7 +107,7 @@ def test_packet_join(system_mock: Mock, output: Optional[Path], force: bool) -> 
     for packet in packets:
         assert str(packet) in args[0]
     if force:
-        assert "--force" == args[0][1]
+        assert "--overwrite" == args[0][1]
     if output:
         assert "--output" in args[0] and str(output) in args[0]
 
@@ -166,20 +166,131 @@ def test_inspect(
 def test_packet_dump(system_mock: Mock) -> None:
     system_mock.return_value = "return"
     assert sequoia.packet_dump(packet=Path("packet")) == "return"
-    system_mock.assert_called_once_with(["sq", "toolbox", "packet", "dump", "packet"])
+    system_mock.assert_called_once_with(["sq", "toolbox", "packet", "dump", "packet"], ignore_stderr=True)
 
 
 @mark.parametrize(
-    "packet_dump_return, field, expectation",
+    "packet_dump_return, query, result, expectation",
     [
         (
-            "foo: bar",
-            "foo",
+            """
+Signature Packet
+    Version: 4
+    Type: SubkeyBinding
+    Hash algo: SHA512
+""",
+            "Type",
+            "SubkeyBinding",
             does_not_raise(),
         ),
         (
-            "foo: bar",
-            "baz",
+            """
+Signature Packet
+    Version: 4
+    Type: SubkeyBinding
+    Hash algo: SHA512
+    Hashed area:
+      Signature creation time: 2022-12-31 15:53:59 UTC
+      Issuer: BBBBBB
+    Unhashed area:
+      Issuer: 42424242
+""",
+            "Unhashed area.Issuer",
+            "42424242",
+            does_not_raise(),
+        ),
+        (
+            """
+Signature Packet
+    Version: 4
+    Type: SubkeyBinding
+    Hash algo: SHA512
+    Hashed area:
+      Signature creation time: 2022-12-31 15:53:59 UTC
+    Unhashed area:
+      Issuer: 42424242
+""",
+            "Hashed area|Unhashed area.Issuer",
+            "42424242",
+            does_not_raise(),
+        ),
+        (
+            """
+Signature Packet
+    Version: 4
+    Type: SubkeyBinding
+    Hash algo: SHA1
+    Hashed area:
+      Signature creation time: 2022-12-31
+""",
+            "*.Signature creation time",
+            "2022-12-31",
+            does_not_raise(),
+        ),
+        (
+            """
+Signature Packet
+    a:
+      b:
+        x: foo
+    b:
+      b:
+        c: bar
+""",
+            "*.b.c",
+            "bar",
+            does_not_raise(),
+        ),
+        (
+            """
+Signature Packet
+    a:
+      b:
+        x:
+          y:
+            z: foo
+    b:
+      b:
+        x:
+          y:
+            z: foo
+          w:
+            w: foo
+        k:
+          i:
+            c: bar
+""",
+            "*.b.*.*.c",
+            "bar",
+            does_not_raise(),
+        ),
+        (
+            """
+Signature Packet
+    a:
+      c:
+        b: foo
+    a:
+      b: bar
+""",
+            "a.b",
+            "bar",
+            does_not_raise(),
+        ),
+        (
+            """
+Signature Packet
+    Version: 4
+    Type: SubkeyBinding
+    Hash algo: SHA512
+    Hashed area:
+      Signature creation time: 2022-12-31 15:53:59 UTC
+    Unhashed area:
+      Issuer: 42424242
+    Issuer: BBBBBBBB
+""",
+            "Hashed area.Issuer",
+            None,
             raises(Exception),
         ),
     ],
@@ -188,13 +299,14 @@ def test_packet_dump(system_mock: Mock) -> None:
 def test_packet_dump_field(
     packet_dump_mock: Mock,
     packet_dump_return: str,
-    field: str,
+    query: str,
+    result: str,
     expectation: ContextManager[str],
 ) -> None:
     packet_dump_mock.return_value = packet_dump_return
 
     with expectation:
-        sequoia.packet_dump_field(packet=Path("packet"), field=field)
+        assert sequoia.packet_dump_field(packet=Path("packet"), query=query) == result
 
 
 @patch("libkeyringctl.sequoia.packet_dump_field")
@@ -253,4 +365,4 @@ def test_certify(system_mock: Mock, output: Optional[Path]) -> None:
     assert sequoia.certify(key=Path("key"), certificate=Path("cert"), uid=Uid("uid"), output=output) == "return"
     name, args, kwargs = system_mock.mock_calls[0]
     if output:
-        assert str(output) == args[0][-1]
+        assert str(output) == args[0][5]
