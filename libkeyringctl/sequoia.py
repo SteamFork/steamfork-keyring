@@ -1,12 +1,19 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from collections.abc import Iterable
+from collections import deque
 from datetime import datetime
 from functools import reduce
 from pathlib import Path
+from platform import python_version_tuple
 from re import sub
 from tempfile import mkdtemp
 from typing import Dict
+
+# NOTE: remove after python 3.8.x is no longer supported upstream
+if int(python_version_tuple()[1]) < 9:  # pragma: no cover
+    from typing import Iterable
+else:
+    from collections.abc import Iterable
 from typing import List
 from typing import Optional
 
@@ -42,7 +49,7 @@ def keyring_split(working_dir: Path, keyring: Path, preserve_filename: bool = Fa
     keyring_dir = Path(mkdtemp(dir=working_dir, prefix="keyring-")).absolute()
 
     with cwd(keyring_dir):
-        system(["sq", "toolbox", "keyring", "split", "--prefix", "", str(keyring)])
+        system(["sq", "--home", "none", "--cert-store", "none", "keyring", "split", "--prefix", "''", str(keyring)])
 
     keyrings: List[Path] = list(natural_sort_path(keyring_dir.iterdir()))
 
@@ -68,9 +75,9 @@ def keyring_merge(certificates: List[Path], output: Optional[Path] = None, force
     The result if no output file has been used
     """
 
-    cmd = ["sq", "toolbox", "keyring", "merge"]
+    cmd = ["sq", "--home", "none", "--cert-store", "none", "keyring", "merge"]
     if force:
-        cmd.insert(1, "--force")
+        cmd.insert(1, "--overwrite")
     if output:
         cmd += ["--output", str(output)]
     cmd += [str(cert) for cert in sorted(certificates)]
@@ -96,7 +103,20 @@ def packet_split(working_dir: Path, certificate: Path) -> Iterable[Path]:
     packet_dir = Path(mkdtemp(dir=working_dir, prefix="packet-")).absolute()
 
     with cwd(packet_dir):
-        system(["sq", "toolbox", "packet", "split", "--prefix", "", str(certificate)])
+        system(
+            [
+                "sq",
+                "--home",
+                "none",
+                "--cert-store",
+                "none",
+                "packet",
+                "split",
+                "--output-prefix",
+                "''",
+                str(certificate),
+            ]
+        )
     return natural_sort_path(packet_dir.iterdir())
 
 
@@ -114,9 +134,9 @@ def packet_join(packets: List[Path], output: Optional[Path] = None, force: bool 
     The result if no output file has been used
     """
 
-    cmd = ["sq", "toolbox", "packet", "join"]
+    cmd = ["sq", "--home", "none", "--cert-store", "none", "packet", "join"]
     if force:
-        cmd.insert(1, "--force")
+        cmd.insert(1, "--overwrite")
     packets_str = list(map(lambda path: str(path), packets))
     cmd.extend(packets_str)
     cmd.extend(["--output", str(output)])
@@ -139,7 +159,7 @@ def inspect(
     The result of the inspection
     """
 
-    cmd = ["sq", "inspect"]
+    cmd = ["sq", "--home", "none", "--cert-store", "none", "inspect"]
     if certifications:
         cmd.append("--certifications")
     cmd.append(str(packet))
@@ -167,16 +187,26 @@ def packet_dump(packet: Path) -> str:
     The contents of the packet dump
     """
 
-    return system(["sq", "toolbox", "packet", "dump", str(packet)])
+    return system(["sq", "--home", "none", "--cert-store", "none", "packet", "dump", str(packet)], ignore_stderr=True)
 
 
-def packet_dump_field(packet: Path, field: str) -> str:
+def packet_dump_field(packet: Path, query: str) -> str:
     """Retrieve the value of a field from a PGP packet
+
+    Field queries are possible with the following notation during tree traversal:
+    - Use '.' to separate the parent section
+    - Use '*' as a wildcard for the current section
+    - Use '|' inside the current level as a logical OR
+
+    Example:
+    - Version
+    - Hashed area|Unhashed area.Issuer
+    - *.Issuer
 
     Parameters
     ----------
     packet: The path to the PGP packet to retrieve the value from
-    field: The name of the field
+    query: The name of the field as a query notation
 
     Raises
     ------
@@ -188,11 +218,49 @@ def packet_dump_field(packet: Path, field: str) -> str:
     """
 
     dump = packet_dump(packet)
-    lines = [line.strip() for line in dump.splitlines()]
-    lines = list(filter(lambda line: line.strip().startswith(f"{field}: "), lines))
-    if not lines:
-        raise Exception(f'Packet has no field "{field}"')
-    return lines[0].split(sep=": ", maxsplit=1)[1]
+
+    queries = deque(query.split("."))
+    path = [queries.popleft()]
+    depth = 0
+
+    # remove leading 4 space indention
+    lines = list(filter(lambda line: line.startswith("    "), dump.splitlines()))
+    lines = [sub(r"^ {4}", "", line, count=1) for line in lines]
+    # filter empty lines
+    lines = list(filter(lambda line: line.strip(), lines))
+
+    for line in lines:
+        # determine current line depth by counting whitespace pairs
+        depth_line = int((len(line) - len(line.lstrip(" "))) / 2)
+        line = line.lstrip(" ")
+
+        # skip nodes that are deeper as our currently matched path
+        if depth < depth_line:
+            continue
+
+        # unwind the current query path until reaching previous match depth
+        while depth > depth_line:
+            queries.appendleft(path.pop())
+            depth -= 1
+        matcher = path[-1].split("|")
+
+        # check if current field matches the query expression
+        field = line.split(sep=":", maxsplit=1)[0]
+        if field not in matcher and "*" not in matcher:
+            continue
+
+        # next depth is one level deeper as the current line
+        depth = depth_line + 1
+
+        # check if matcher is not the leaf of the query expression
+        if queries:
+            path.append(queries.popleft())
+            continue
+
+        # return final match
+        return line.split(sep=": ", maxsplit=1)[1] if ": " in line else line
+
+    raise Exception(f"Packet '{packet}' did not match the query '{query}'")
 
 
 def packet_signature_creation_time(packet: Path) -> datetime:
@@ -206,7 +274,7 @@ def packet_signature_creation_time(packet: Path) -> datetime:
     -------
     The signature creation time as datetime
     """
-    field = packet_dump_field(packet, "Signature creation time")
+    field = packet_dump_field(packet, "Hashed area.Signature creation time")
     field = " ".join(field.split(" ", 3)[0:3])
     return datetime.strptime(field, "%Y-%m-%d %H:%M:%S %Z")
 
@@ -261,10 +329,10 @@ def key_generate(uids: List[Uid], outfile: Path) -> str:
     The result of the key generate call
     """
 
-    cmd = ["sq", "key", "generate"]
+    cmd = ["sq", "--home", "none", "--cert-store", "none", "key", "generate", "--without-password", "--own-key"]
     for uid in uids:
         cmd.extend(["--userid", str(uid)])
-    cmd.extend(["--output", str(outfile)])
+    cmd.extend(["--output", str(outfile), "--rev-cert", f"{str(outfile)}.rev"])
     return system(cmd)
 
 
@@ -281,7 +349,7 @@ def key_extract_certificate(key: Path, output: Optional[Path]) -> str:
     The result of the extract in case output is None
     """
 
-    cmd = ["sq", "toolbox", "extract-cert", str(key)]
+    cmd = ["sq", "--keyring", str(key), "--home", "none", "cert", "export", "--all"]
     if output:
         cmd.extend(["--output", str(output)])
     return system(cmd)
@@ -302,7 +370,8 @@ def certify(key: Path, certificate: Path, uid: Uid, output: Optional[Path]) -> s
     The result of the certification in case output is None
     """
 
-    cmd = ["sq", "pki", "certify", str(key), str(certificate), uid]
+    cmd = ["sq", "--home", "none", "--cert-store", "none", "pki", "vouch", "add"]
     if output:
         cmd.extend(["--output", str(output)])
+    cmd.extend(["--certifier-file", str(key), "--cert-file", str(certificate), "--userid", uid])
     return system(cmd)

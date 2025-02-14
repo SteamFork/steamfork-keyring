@@ -1,12 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-from collections.abc import Iterable
-from collections.abc import Iterator
 from contextlib import contextmanager
 from hashlib import sha256
 from os import chdir
 from os import environ
 from os import getcwd
 from pathlib import Path
+from platform import python_version_tuple
 from re import escape
 from re import split
 from re import sub
@@ -22,6 +21,14 @@ from traceback import print_stack
 from typing import IO
 from typing import AnyStr
 from typing import Dict
+
+# NOTE: remove after python 3.8.x is no longer supported upstream
+if int(python_version_tuple()[1]) < 9:  # pragma: no cover
+    from typing import Iterable
+    from typing import Iterator
+else:
+    from collections.abc import Iterable
+    from collections.abc import Iterator
 from typing import List
 from typing import Optional
 from typing import Set
@@ -97,6 +104,7 @@ def system(
     _stdin: Optional[IO[AnyStr]] = None,
     exit_on_error: bool = False,
     env: Optional[Dict[str, str]] = None,
+    ignore_stderr: bool = False,
 ) -> str:
     """Execute a command using check_output
 
@@ -119,7 +127,7 @@ def system(
         env = {"HOME": environ["HOME"], "PATH": environ["PATH"], "LANG": "en_US.UTF-8"}
 
     try:
-        return check_output(cmd, stderr=STDOUT, stdin=_stdin, env=env).decode()
+        return check_output(cmd, stderr=None if ignore_stderr else STDOUT, stdin=_stdin, env=env).decode()
     except CalledProcessError as e:
         stderr.buffer.write(e.stdout)
         print_stack()
@@ -155,7 +163,8 @@ def transform_fd_to_tmpfile(working_dir: Path, sources: List[Path]) -> None:
     sources: Paths that should be iterated and all fd's transformed to tmpfiles
     """
     for index, source in enumerate(sources):
-        if str(source).startswith("/proc/self/fd"):
+        source_str = str(source)
+        if source_str.startswith("/proc/self/fd/") or source_str.startswith("/dev/fd/"):
             file = mkstemp(dir=working_dir, prefix=f"{source.name}", suffix=".fd")[1]
             with open(file, mode="wb") as f:
                 f.write(source.read_bytes())

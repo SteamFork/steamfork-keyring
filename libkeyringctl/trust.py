@@ -85,6 +85,14 @@ def certificate_trust(  # noqa: ignore=C901
     """
 
     fingerprint: Fingerprint = Fingerprint(certificate.name)
+    keyring_root = certificate.parent.parent.parent
+
+    # collect revoked main keys
+    main_keys_revoked: Set[Fingerprint] = set()
+    for main_key in main_keys:
+        for revocation in keyring_root.glob(f"main/*/{main_key}/revocation/*.asc"):
+            if main_key.endswith(revocation.stem):
+                main_keys_revoked.add(main_key)
 
     revocations: Set[Fingerprint] = set()
     # TODO: what about direct key revocations/signatures?
@@ -130,6 +138,9 @@ def certificate_trust(  # noqa: ignore=C901
                 raise Exception(f"Unknown issuer: {issuer}")
             # only take main key certifications into account
             if not contains_fingerprint(fingerprints=main_keys, fingerprint=issuer):
+                continue
+            # do not care about revoked main keys
+            if contains_fingerprint(fingerprints=main_keys_revoked, fingerprint=issuer):
                 continue
             # do not care about certifications that are revoked
             if contains_fingerprint(fingerprints=revocations, fingerprint=issuer):
@@ -180,7 +191,7 @@ def certificate_trust(  # noqa: ignore=C901
     return trust
 
 
-def trust_icon(trust: Optional[Trust]) -> str:
+def trust_icon(trust: Trust) -> str:
     """Returns a single character icon representing the passed trust status
 
     Parameters
@@ -191,15 +202,15 @@ def trust_icon(trust: Optional[Trust]) -> str:
     -------
     The single character icon representing the passed trust status
     """
-    if trust == Trust.revoked:
-        return "✗"
-    if trust == Trust.unknown:
-        return "~"
-    if trust == Trust.marginal:
-        return "~"
-    if trust == Trust.full:
-        return "✓"
-    return "?"
+    icon = "?"
+    match trust:
+        case Trust.revoked:
+            icon = "✗"
+        case Trust.unknown | Trust.marginal:
+            icon = "~"
+        case Trust.full:
+            icon = "✓"
+    return icon
 
 
 def trust_color(trust: Trust) -> Color:
@@ -213,16 +224,13 @@ def trust_color(trust: Trust) -> Color:
     -------
     The color representing the passed trust status
     """
-    color: Color = Color.RED
-    if trust == Trust.revoked:
-        color = Color.RED
-    if trust == Trust.unknown:
-        color = Color.YELLOW
-    if trust == Trust.marginal:
-        color = Color.YELLOW
-    if trust == Trust.full:
-        color = Color.GREEN
-    return color
+    match trust:
+        case Trust.full:
+            return Color.GREEN
+        case Trust.unknown | Trust.marginal:
+            return Color.YELLOW
+        case _:
+            return Color.RED
 
 
 def format_trust_label(trust: Trust) -> str:
