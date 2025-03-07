@@ -925,7 +925,7 @@ def export_revoked(certs: List[Path], keyring_root: Path, main_keys: Set[Fingerp
     The output file contains the fingerprints of all self-revoked keys and all keys for which at least two revocations
     by any main key exist.
     The exported file is used by pacman-key when importing a keyring (see
-    https://man.steamfork.org/man/pacman-key.8#PROVIDING_A_KEYRING_FOR_IMPORT).
+    https://man.archlinux.org/man/pacman-key.8#PROVIDING_A_KEYRING_FOR_IMPORT).
 
     Parameters
     ----------
@@ -1147,19 +1147,19 @@ def build(
     target_dir.mkdir(parents=True, exist_ok=True)
     target_dir.touch()
 
-    keyring: Path = target_dir / Path("steamfork.gpg")
+    keyring: Path = target_dir / Path("holo.gpg")
     export(working_dir=working_dir, keyring_root=keyring_root, output=keyring)
 
     trusted_main_keys = export_ownertrust(
         certs=[keyring_root / "main"],
         keyring_root=keyring_root,
-        output=target_dir / "steamfork-trusted",
+        output=target_dir / "holo-trusted",
     )
     export_revoked(
         certs=[keyring_root],
         keyring_root=keyring_root,
         main_keys=set(trusted_main_keys),
-        output=target_dir / "steamfork-revoked",
+        output=target_dir / "holo-revoked",
     )
 
 
